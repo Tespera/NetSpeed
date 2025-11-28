@@ -3,12 +3,12 @@ import Cocoa
 class NetSpeedStatusView: NSView {
     weak var statusItem: NSStatusItem?
     var font: NSFont = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .regular)
-    var showIcons: Bool = true
+    var showArrow: Bool = true
     var alignment: NSTextAlignment = .right
     var horizontalPadding: CGFloat = 0
     var lineGap: CGFloat = 0
-    var upIcon: String = "↑"
-    var downIcon: String = "↓"
+    var upIcon: String = "↑ "
+    var downIcon: String = "↓ "
     var arrowKern: CGFloat = -0.6
     private var upText: String = ""
     private var downText: String = ""
@@ -32,8 +32,8 @@ class NetSpeedStatusView: NSView {
 
         let upHas = !upText.isEmpty
         let downHas = !downText.isEmpty
-        let up = upHas ? ((showIcons ? upIcon : "") + upText) : ""
-        let down = downHas ? ((showIcons ? downIcon : "") + downText) : ""
+        let up = upHas ? ((showArrow ? upIcon : "") + upText) : ""
+        let down = downHas ? ((showArrow ? downIcon : "") + downText) : ""
 
         let lineRectWidth = bounds.width - horizontalPadding * 2
 
@@ -68,7 +68,7 @@ class NetSpeedStatusView: NSView {
     // Click handling is provided by NSStatusItem.button's menu.
     private func buildAttributed(_ text: String, _ attrs: [NSAttributedString.Key: Any]) -> NSAttributedString {
         let ms = NSMutableAttributedString(string: text, attributes: attrs)
-        if showIcons && text.count > 1 {
+        if showArrow && text.count > 1 {
             ms.addAttribute(.kern, value: arrowKern, range: NSRange(location: 0, length: 1))
         }
         return ms

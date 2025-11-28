@@ -16,7 +16,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "NetSpeed",
-            path: "Sources"
+            path: "Sources",
+            exclude: ["Assets"]
         )
     ]
 )

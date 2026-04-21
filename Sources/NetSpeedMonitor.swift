@@ -2,67 +2,40 @@ import Foundation
 import SystemConfiguration
 
 class NetSpeedMonitor {
-    private let queue = DispatchQueue(label: "com.netspeed.monitor", attributes: .concurrent)
-    private var _previousByInterface: [String: (up: UInt64, down: UInt64)] = [:]
-    private var _lastTime = Date()
-    private var _currentUp: Double = 0
-    private var _currentDown: Double = 0
-    private var _isInitialized = false
-    private var _upHistory: [Double] = []
-    private var _downHistory: [Double] = []
+    // Serial queue. All mutable state below is only touched inside queue blocks.
+    private let queue = DispatchQueue(label: "com.netspeed.monitor")
+    private var previousByInterface: [String: (up: UInt64, down: UInt64)] = [:]
+    private var lastTime = Date()
+    private var currentUp: Double = 0
+    private var currentDown: Double = 0
+    private var isInitialized = false
+    private var upHistory: [Double] = []
+    private var downHistory: [Double] = []
     private let maxWindow = 5
+
     enum Scope { case primary, all }
     var scope: Scope = .primary
-    
-    private var previousByInterface: [String: (up: UInt64, down: UInt64)] {
-        get { queue.sync { _previousByInterface } }
-        set { queue.async(flags: .barrier) { self._previousByInterface = newValue } }
-    }
-    
-    private var lastTime: Date {
-        get { queue.sync { _lastTime } }
-        set { queue.async(flags: .barrier) { self._lastTime = newValue } }
-    }
-    
-    private var currentUp: Double {
-        get { queue.sync { _currentUp } }
-        set { queue.async(flags: .barrier) { self._currentUp = newValue } }
-    }
-    
-    private var currentDown: Double {
-        get { queue.sync { _currentDown } }
-        set { queue.async(flags: .barrier) { self._currentDown = newValue } }
-    }
-    
-    private var isInitialized: Bool {
-        get { queue.sync { _isInitialized } }
-        set { queue.async(flags: .barrier) { self._isInitialized = newValue } }
-    }
 
     init() {
-        initializeData()
-    }
-    
-    private func initializeData() {
-        queue.async(flags: .barrier) {
-            self._previousByInterface = NetSpeedMonitor.fetchNetworkBytesByInterface()
-            self._lastTime = Date()
-            self._isInitialized = true
+        queue.async {
+            self.previousByInterface = NetSpeedMonitor.fetchNetworkBytesByInterface()
+            self.lastTime = Date()
+            self.isInitialized = true
         }
     }
-    
-    func getUploadSpeed() -> Double { currentUp }
-    func getDownloadSpeed() -> Double { currentDown }
+
+    func getUploadSpeed() -> Double { queue.sync { currentUp } }
+    func getDownloadSpeed() -> Double { queue.sync { currentDown } }
 
     func refresh(completion: (() -> Void)? = nil) {
-        queue.async(flags: .barrier) {
-            if !self._isInitialized {
-                self._previousByInterface = NetSpeedMonitor.fetchNetworkBytesByInterface()
-                self._lastTime = Date()
-                self._isInitialized = true
+        queue.async {
+            if !self.isInitialized {
+                self.previousByInterface = NetSpeedMonitor.fetchNetworkBytesByInterface()
+                self.lastTime = Date()
+                self.isInitialized = true
             }
             let now = Date()
-            let diff = now.timeIntervalSince(self._lastTime)
+            let diff = now.timeIntervalSince(self.lastTime)
             if diff <= 0 { return }
 
             let ifaceMap = NetSpeedMonitor.fetchNetworkBytesByInterface()
@@ -83,19 +56,19 @@ class NetSpeedMonitor {
                 case .all:
                     if name == "lo0" { continue }
                 }
-                let prev = self._previousByInterface[name] ?? (0, 0)
+                let prev = self.previousByInterface[name] ?? (0, 0)
                 upDeltaTotal &+= NetSpeedMonitor.deltaBytes(prev: prev.up, curr: bytes.up)
                 downDeltaTotal &+= NetSpeedMonitor.deltaBytes(prev: prev.down, curr: bytes.down)
                 consideredCount += 1
             }
 
             if consideredCount == 0 {
-                self._upHistory.removeAll()
-                self._downHistory.removeAll()
-                self._currentUp = 0
-                self._currentDown = 0
-                self._previousByInterface = ifaceMap
-                self._lastTime = now
+                self.upHistory.removeAll()
+                self.downHistory.removeAll()
+                self.currentUp = 0
+                self.currentDown = 0
+                self.previousByInterface = ifaceMap
+                self.lastTime = now
                 if let completion = completion { DispatchQueue.main.async { completion() } }
                 return
             }
@@ -103,49 +76,49 @@ class NetSpeedMonitor {
             let newUp = max(0, Double(upDeltaTotal) / diff)
             let newDown = max(0, Double(downDeltaTotal) / diff)
 
-            self._upHistory.append(newUp)
-            if self._upHistory.count > self.maxWindow { self._upHistory.removeFirst() }
-            self._downHistory.append(newDown)
-            if self._downHistory.count > self.maxWindow { self._downHistory.removeFirst() }
+            self.upHistory.append(newUp)
+            if self.upHistory.count > self.maxWindow { self.upHistory.removeFirst() }
+            self.downHistory.append(newDown)
+            if self.downHistory.count > self.maxWindow { self.downHistory.removeFirst() }
 
+            // Responsive when fast (>= 1 MiB/s), smoothed with 3-sample moving average
+            // when slow — the threshold is binary (1024*1024), not SI, to match formatSpeed.
             let upWindow = newUp >= 1_048_576 ? 1 : 3
             let downWindow = newDown >= 1_048_576 ? 1 : 3
-            let upSliceCount = min(upWindow, self._upHistory.count)
-            let downSliceCount = min(downWindow, self._downHistory.count)
-            let upAvg = self._upHistory.suffix(upSliceCount).reduce(0, +) / Double(upSliceCount)
-            let downAvg = self._downHistory.suffix(downSliceCount).reduce(0, +) / Double(downSliceCount)
+            let upSliceCount = min(upWindow, self.upHistory.count)
+            let downSliceCount = min(downWindow, self.downHistory.count)
+            let upAvg = self.upHistory.suffix(upSliceCount).reduce(0, +) / Double(upSliceCount)
+            let downAvg = self.downHistory.suffix(downSliceCount).reduce(0, +) / Double(downSliceCount)
 
-            self._currentUp = upAvg
-            self._currentDown = downAvg
-            self._previousByInterface = ifaceMap
-            self._lastTime = now
+            self.currentUp = upAvg
+            self.currentDown = downAvg
+            self.previousByInterface = ifaceMap
+            self.lastTime = now
             if let completion = completion {
                 DispatchQueue.main.async { completion() }
             }
         }
     }
-    
-    private func updateIfNeeded() {}
-    
+
     static func fetchNetworkBytesByInterface() -> [String: (up: UInt64, down: UInt64)] {
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>? = nil
         var result: [String: (UInt64, UInt64)] = [:]
-        
+
         defer {
             if ifaddrPtr != nil {
                 freeifaddrs(ifaddrPtr)
             }
         }
-        
+
         guard getifaddrs(&ifaddrPtr) == 0 else {
             print("Error getting network interfaces: \(errno)")
             return [:]
         }
-        
+
         guard let firstAddr = ifaddrPtr else {
             return [:]
         }
-        
+
         var ptr = firstAddr
         while true {
             guard let ifaAddr = ptr.pointee.ifa_addr else {
@@ -167,23 +140,23 @@ class NetSpeedMonitor {
                     result[name] = (up, down)
                 }
             }
-            
+
             if ptr.pointee.ifa_next == nil { break }
             ptr = ptr.pointee.ifa_next!
         }
-        
+
         return result
     }
 
-    private static func shouldIncludeInterface(named name: String, flags: UInt32) -> Bool { true }
-
     private static func deltaBytes(prev: UInt64, curr: UInt64) -> UInt64 {
-        if curr >= prev { return curr - prev }
-        return 0
+        curr >= prev ? curr - prev : 0
     }
 
+    private static let dynamicStore: SCDynamicStore? =
+        SCDynamicStoreCreate(nil, "NetSpeed" as CFString, nil, nil)
+
     static func primaryInterfaceName() -> String? {
-        let store = SCDynamicStoreCreate(nil, "NetSpeed" as CFString, nil, nil)
+        guard let store = dynamicStore else { return nil }
         if let dict = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any],
            let name = dict["PrimaryInterface"] as? String {
             return name

@@ -14,6 +14,7 @@ class NetSpeedStatusView: NSView {
     private var downText: String = ""
 
     func setText(up: String, down: String) {
+        guard up != upText || down != downText else { return }
         upText = up
         downText = down
         needsDisplay = true
